@@ -24,7 +24,7 @@ ROW = 45.0                      # px between sort rows (900 twips in the vanilla
 POPUP_SPRITE = 475
 RENDERER_CHAR = 315
 QTY_EDITTEXT = 70
-QTY_NEW_XMIN_PX = -58.0
+QTY_NEW_XMIN_PX = -110.0
 LABEL_DEFAULT = 'Damage / Armor'
 
 
@@ -89,10 +89,11 @@ def setcode(p, owner, ins, **body_fields):
 
 
 # Feature bits; also the value of MenuInventory.gcUiVersion, which the script reads.
-F_SORT, F_ALWAYS, F_DUR, F_WIDE = 1, 2, 4, 8
-ALL = F_SORT | F_ALWAYS | F_DUR | F_WIDE
+F_SORT, F_ALWAYS, F_DUR, F_WIDE, F_POS = 1, 2, 4, 8, 32          # 16 = "Gear Compare UI present" (_marker)
+ALL = F_SORT | F_ALWAYS | F_DUR | F_WIDE | F_POS
 FEATURE_NAMES = {F_SORT: 'Damage / Armor sort option', F_ALWAYS: 'always-sorted grid',
-                 F_DUR: 'durability above equipped items', F_WIDE: 'wider corner numbers (wear loss in red)'}
+                 F_DUR: 'durability above equipped items', F_WIDE: 'wider corner numbers (wear loss in red)',
+                 F_POS: 'number position setting'}
 
 
 def patch_abc(abc, feats=ALL):
@@ -103,6 +104,8 @@ def patch_abc(abc, feats=ALL):
         _feat_always(p)
     if feats & F_DUR:
         patch_abc_durability(p)
+    if feats & F_POS:
+        _feat_pos(p)
     _marker(p, feats)
     return abc
 
@@ -286,6 +289,135 @@ def _feat_always(p):
                p.body(A + 'setSortingMode'))
 
 
+POS_MARGIN_PX = 6                # same inset the game uses for the corner icons
+
+
+def _feat_pos(p):
+    """Where the +/- sits in grid slots: static InventorySlotOverlay.gcQtyPos (0 = untouched, 1 bottom right,
+    2 bottom left, 3 top right, 4 top left, 5 centre), set by MenuInventory.gcSetQtyPos(int). Text wider than the slot
+    is scaled down to fit (font size comes from the script).
+    InventorySlotOverlay.gcPlaceQty() runs at the end of realignIcons (SlotBase.updateData calls SetQuantity before
+    updateIcons). Only Gear Compare's text moves (it starts with + - or =); stack counts and every other number stay
+    where the game puts them: the field's original x is kept in gcQtyX0 and put back for them."""
+    abc = p.a
+    O = 'InventorySlotOverlay::'
+    ci = next(i for i, x in enumerate(abc.instances) if abc.mn(x['name']) == 'InventorySlotOverlay')
+    traits = abc.instances[ci]['traits']
+    tq = next(t for t in traits if abc.mn(t.name) == 'tfQuantity')
+    t_void = abc.methods[p.by_owner[O + 'SetQuantity']]['ret']
+    mci = next(i for i, x in enumerate(abc.instances) if abc.mn(x['name']) == 'MenuInventory')
+    t_int = next(t for t in abc.instances[mci]['traits'] if abc.mn(t.name) == 'currentSortingMode').type_name
+    t_num = next(t.type_name for ins in abc.instances for t in ins['traits']
+                 if t.kind == 0 and abc.mn(t.type_name) == 'Number')
+    R = O + 'realignIcons'
+    mn_tf = p.operand(R, 'getproperty', 'tfQuantity')
+    mn_rect = p.operand(R, 'getproperty', '_targetRect')
+    mn_x = p.operand(R, 'getproperty', 'x')
+    mn_y = p.operand(R, 'getproperty', 'y')
+    mn_w = p.operand(R, 'getproperty', 'width')
+    mn_h = p.operand(R, 'getproperty', 'height')
+    mn_th = p.operand(R, 'getproperty', 'textHeight')
+    mn_tw = p.renamed_mn(mn_th, 'textWidth')
+    mn_text = p.renamed_mn(mn_th, 'text')
+    mn_charat = p.renamed_mn(mn_th, 'charAt')
+    mn_pos = p.renamed_mn(tq.name, 'gcQtyPos')
+    mn_x0 = p.renamed_mn(tq.name, 'gcQtyX0')
+    mn_place = p.renamed_mn(tq.name, 'gcPlaceQty')
+    cls_mn = abc.instances[ci]['name']
+
+    st = abcrt.Trait()                                      # static gcQtyPos:int = 0
+    st.name, st.kind, st.attr, st.slot_id, st.type_name, st.vindex, st.vkind = mn_pos, 0, 0, 0, t_int, 0, 0
+    abc.classes[ci]['traits'].append(st)
+    add_slot(abc, ci, mn_x0, t_num)                         # gcQtyX0:Number = NaN
+
+    def rect(prop):
+        return [I('getlocal0'), I('getproperty', mn_rect), I('getproperty', prop)]
+
+    def tf(*more):
+        return [I('getlocal0'), I('getproperty', mn_tf)] + list(more)
+
+    m = POS_MARGIN_PX
+    mn_sx = p.renamed_mn(mn_th, 'scaleX')
+    mn_sy = p.renamed_mn(mn_th, 'scaleY')
+
+    def scale_to(*val):
+        return tf(*val, I('setproperty', mn_sx)) + tf(*val, I('setproperty', mn_sy))
+
+    # locals: 1 pos (1..5), 2 right edge of the text, 3 scaled text width, 4 first char, 5 scale
+    code = [
+        I('getlocal0'), I('pushscope'),
+        I('getlocal0'), I('getproperty', mn_rect), I('iffalse', 'P_END'),
+        I('getlocal0'), I('getproperty', mn_tf), I('iffalse', 'P_END'),
+        # remember the game's x once (NaN != NaN)
+        I('getlocal0'), I('getproperty', mn_x0), I('getlocal0'), I('getproperty', mn_x0), I('ifeq', 'P_HAVE'),
+        I('getlocal0')] + tf(I('getproperty', mn_x)) + [I('setproperty', mn_x0),
+        L('P_HAVE', 'getlex', cls_mn), I('getproperty', mn_pos), I('convert_i'), I('setlocal1'),
+        I('getlocal1'), I('iffalse', 'P_END')] + tf(
+        I('getproperty', mn_text), I('pushbyte', 0), I('callproperty', mn_charat, 1), I('coerce_s'),
+        I('setlocal', 4)) + [
+        I('getlocal', 4), I('pushstring', p.string('+')), I('ifeq', 'P_OK'),
+        I('getlocal', 4), I('pushstring', p.string('-')), I('ifeq', 'P_OK'),
+        I('getlocal', 4), I('pushstring', p.string('=')), I('ifeq', 'P_OK')
+        ] + scale_to(I('pushbyte', 1)) + tf(I('getlocal0'), I('getproperty', mn_x0), I('setproperty', mn_x)) + [
+        I('jump', 'P_END'),                                                 # not ours: the game's place and size
+        # shrink to fit the icon: scale = (slot width - 2 margins) / text width, at most 1
+        L('P_OK', 'getlocal0')] + [I('getproperty', mn_rect), I('getproperty', mn_w), I('pushbyte', 2 * m),
+        I('subtract')] + tf(I('getproperty', mn_tw)) + [I('divide'), I('convert_d'), I('setlocal', 5),
+        I('getlocal', 5), I('pushbyte', 1), I('iflt', 'P_SC'),
+        I('pushbyte', 1), I('convert_d'), I('setlocal', 5),
+        L('P_SC', 'getlocal0')] + [I('getproperty', mn_tf), I('getlocal', 5), I('setproperty', mn_sx)] + tf(
+        I('getlocal', 5), I('setproperty', mn_sy)) + tf(
+        I('getproperty', mn_tw), I('getlocal', 5), I('multiply'), I('convert_d'), I('setlocal3')) + rect(mn_x) + \
+        rect(mn_w) + [I('add'), I('pushbyte', m), I('subtract'), I('convert_d'), I('setlocal2'),
+        I('getlocal1'), I('pushbyte', 2), I('ifeq', 'P_LEFT'),
+        I('getlocal1'), I('pushbyte', 4), I('ifeq', 'P_LEFT'),
+        I('getlocal1'), I('pushbyte', 5), I('ifeq', 'P_MIDX'),
+        I('jump', 'P_Y'),
+        L('P_LEFT', 'getlocal0'), I('getproperty', mn_rect), I('getproperty', mn_x), I('pushbyte', m), I('add'),
+        I('getlocal3'), I('add'), I('convert_d'), I('setlocal2'), I('jump', 'P_Y'),
+        L('P_MIDX', 'getlocal0'), I('getproperty', mn_rect), I('getproperty', mn_x)] + rect(mn_w) + [
+        I('pushbyte', 2), I('divide'), I('add'),
+        I('getlocal3'), I('pushbyte', 2), I('divide'), I('add'), I('convert_d'), I('setlocal2'),
+        L('P_Y', 'getlocal1'), I('pushbyte', 3), I('ifeq', 'P_TOP'),
+        I('getlocal1'), I('pushbyte', 4), I('ifeq', 'P_TOP'),
+        I('getlocal1'), I('pushbyte', 5), I('ifeq', 'P_MIDY'),
+        # bottom: like the game, text bottom 'm' above the slot bottom
+        I('getlocal0'), I('getproperty', mn_tf)] + rect(mn_y) + rect(mn_h) + [I('add')] + tf(
+        I('getproperty', mn_th)) + [I('getlocal', 5), I('multiply'), I('subtract'), I('pushbyte', m), I('subtract'),
+        I('setproperty', mn_y), I('jump', 'P_SETX'),
+        L('P_TOP', 'getlocal0'), I('getproperty', mn_tf)] + rect(mn_y) + [I('pushbyte', 2), I('add'),
+        I('setproperty', mn_y), I('jump', 'P_SETX'),
+        L('P_MIDY', 'getlocal0'), I('getproperty', mn_tf)] + rect(mn_y) + rect(mn_h) + [I('pushbyte', 2),
+        I('divide'), I('add')] + tf(I('getproperty', mn_th)) + [I('getlocal', 5), I('multiply'), I('pushbyte', 2),
+        I('divide'), I('subtract'), I('pushbyte', 2), I('subtract'), I('setproperty', mn_y),
+        # right-aligned field: the text's right edge = x + width - 2 (gutter); width is already scaled
+        L('P_SETX', 'getlocal0'), I('getproperty', mn_tf), I('getlocal2')] + tf(I('getproperty', mn_w)) + [
+        I('subtract'), I('pushbyte', 2), I('add'), I('setproperty', mn_x),
+        L('P_END', 'returnvoid'),
+    ]
+    labels = ('P_END', 'P_HAVE', 'P_OK', 'P_SC', 'P_LEFT', 'P_MIDX', 'P_Y', 'P_TOP', 'P_MIDY', 'P_SETX')
+    add_method(p, ci, mn_place, [], t_void, code, 6, 6, p.body(O + 'SetQuantity'), labels)
+
+    # realignIcons: place it before every return (after the game's layout)
+    out, n = [], 0
+    for pos, op, args in p.ins(R):
+        if abcrt.OPS[op][0] == 'returnvoid':
+            out += [[pos, abcrt.NAME2OP['getlocal0'], []], ['qp%d' % n, abcrt.NAME2OP['callpropvoid'], [mn_place, 0]],
+                    ['qp%d_r' % n, op, args]]
+            n += 1
+        else:
+            out.append([pos, op, args])
+    assert n >= 1
+    setcode(p, R, out, max_stack=max(p.body(R)['max_stack'], 2))
+
+    # MenuInventory.gcSetQtyPos(pos:int)
+    ssm = next(tr for tr in abc.instances[mci]['traits'] if abc.mn(tr.name) == 'setSortingMode')
+    code = [I('getlocal0'), I('pushscope'), I('getlex', cls_mn), I('getlocal1'), I('setproperty', mn_pos),
+            I('returnvoid')]
+    add_method(p, mci, p.renamed_mn(ssm.name, 'gcSetQtyPos'), [t_int], t_void, code, 2, 2,
+               p.body('MenuInventory::setSortingMode'))
+
+
 def _marker(p, feats):
     abc = p.a
     # ---- 6. marker the script reads to know Gear Compare's inventory UI is the one loaded:
@@ -301,12 +433,12 @@ def _marker(p, feats):
     abc.instances[mci]['traits'].append(t)
 
 
-def add_method(p, ci, trait_mn, params, ret, code, locals_, max_stack, like_body):
+def add_method(p, ci, trait_mn, params, ret, code, locals_, max_stack, like_body, labels=()):
     abc = p.a
     abc.methods.append({'ret': ret, 'params': params, 'name': 0, 'flags': 0, 'options': None, 'pnames': None})
     mi = len(abc.methods) - 1
     for k, it in enumerate(code):
-        if not isinstance(it[0], str) or it[0] not in LABELS:
+        if not isinstance(it[0], str) or (it[0] not in LABELS and it[0] not in labels):
             it[0] = 'm%d_%d' % (mi, k)
     enc, _ = abcrt.encode(code)
     abc.bodies.append({'method': mi, 'max_stack': max_stack, 'locals': locals_, 'init_scope': like_body['init_scope'],
@@ -826,7 +958,7 @@ def patch_best(orig, log=print):
     Returns (patched bytes, feature bits, [(feature name, reason skipped)])."""
     feats, skipped = 0, []
     patch_redswf(orig, 0)                          # the base file itself must be readable and patchable
-    for f in (F_SORT, F_ALWAYS, F_DUR, F_WIDE):
+    for f in (F_SORT, F_ALWAYS, F_DUR, F_WIDE, F_POS):
         try:
             patch_redswf(orig, feats | f)
             feats |= f
