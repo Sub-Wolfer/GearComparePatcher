@@ -924,6 +924,23 @@ class PatchError(Exception):
     pass
 
 
+def inflate_swf(cfx):
+    """CFX/CWS (zlib) or GFX/FWS (uncompressed) SWF bytes -> uncompressed FWS bytes.
+    Some mod tools write the zlib stream without its end marker (checksum); the data itself is complete, so accept a
+    stream that stops early as long as it gave the full length the SWF header declares."""
+    if cfx[:3] in (b'FWS', b'GFX'):
+        return b'FWS' + cfx[3:]
+    declared = struct.unpack_from('<I', cfx, 4)[0]
+    d = zlib.decompressobj()
+    try:
+        body = d.decompress(cfx[8:])
+    except zlib.error:
+        raise PatchError("its inventory screen file is damaged and can't be unpacked")
+    if not d.eof and len(body) + 8 < declared:
+        raise PatchError('its inventory screen file is cut short (%d of %d bytes)' % (len(body) + 8, declared))
+    return b'FWS' + cfx[3:8] + body
+
+
 def patch_redswf(orig, feats=ALL):
     """panel_inventory.redswf bytes (any version derived from the game's) -> Gear Compare-patched bytes with the
     features in feats. Raises PatchError when a part one of them edits is missing or different."""
@@ -931,7 +948,7 @@ def patch_redswf(orig, feats=ALL):
         w = cr2w.CR2W(orig)
         pe, lo, bo, bl, tail = w.swf_layout()
         cfx = w.chunk_data(0)[bo:bo + bl]
-        fws = b'FWS' + cfx[3:8] + zlib.decompress(cfx[8:])
+        fws = inflate_swf(cfx)
         abcs = abcrt.swf_abcs(fws)
         if len(abcs) != 1:
             raise PatchError('expected 1 code block, found %d' % len(abcs))

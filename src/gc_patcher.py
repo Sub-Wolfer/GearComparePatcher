@@ -26,7 +26,7 @@ import gc_patch   # noqa: E402
 import w3bundle   # noqa: E402
 import w3meta     # noqa: E402
 
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 DEPOT = 'gameplay\\gui_new\\swf\\inventory\\panel_inventory.redswf'
 GC_SCRIPT = os.path.join('content', 'scripts', 'local', 'gearCompare.ws')
 MODIO_GAME_ID = '8254'

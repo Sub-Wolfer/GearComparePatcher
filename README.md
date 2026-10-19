@@ -62,6 +62,7 @@ byte-for-byte reproducible, so a rebuilt exe will have a different hash.
 
 Released exes (on Nexus Mods and GitHub Releases), SHA-256:
 
+- 1.1.1: `5ee77f24a29006a5b635ab5e18b503207ebf737cba433480a314ddbc0ef8d3ca`
 - 1.1.0: `6f7287f995f315454da3c2551187679555a31aab8786005ed87756e686e38115`
 - 1.0.0: `61a829d08414b54f45947f262488e4c961600ec34ca135995ed4191c80c43d69`
 
