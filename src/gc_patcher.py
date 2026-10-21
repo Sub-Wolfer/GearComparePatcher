@@ -5,6 +5,10 @@ Gear Compare's changes on top of it and saves the result in Gear Compare's folde
 features then load from that one file. Nothing of the other mod is changed or redistributed: the patching
 happens on your PC, with your copy of the other mod.
 
+Ultrawide Menus' copy of the inventory screen (Mods\\mod0000_UltrawideMenus, or any file whose MenuInventory class has
+a uwInvVersion member) is never used as the source: Ultrawide Menus Patcher rebuilds that copy from Gear Compare's
+file, so it runs after this patcher.
+
 Usage (double-click, or from a command prompt):
   GearComparePatcher.exe                        interactive
   GearComparePatcher.exe --game "D:\\Games\\The Witcher 3" --source auto|vanilla|<mod folder> --yes
@@ -22,13 +26,16 @@ import sys
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import abcrt      # noqa: E402
+import cr2w       # noqa: E402
 import gc_patch   # noqa: E402
 import w3bundle   # noqa: E402
 import w3meta     # noqa: E402
 
-VERSION = '1.1.1'
+VERSION = '1.1.2'
 DEPOT = 'gameplay\\gui_new\\swf\\inventory\\panel_inventory.redswf'
 GC_SCRIPT = os.path.join('content', 'scripts', 'local', 'gearCompare.ws')
+UW_FOLDER = 'mod0000_UltrawideMenus'
 MODIO_GAME_ID = '8254'
 
 
@@ -129,6 +136,35 @@ def find_in_content(content_dir):
         if e is not None:
             return b, e
     return None
+
+
+def has_ultrawide(data):
+    """True when an inventory screen file is Ultrawide Menus' copy: its MenuInventory class has the uwInvVersion
+    member Ultrawide Menus adds. A file that cannot be read counts as False."""
+    try:
+        w = cr2w.CR2W(data)
+        _, _, bo, bl, _ = w.swf_layout()
+        fws = gc_patch.inflate_swf(w.chunk_data(0)[bo:bo + bl])
+        if b'uwInvVersion' not in fws:
+            return False
+        for a in abcrt.swf_abcs(fws):
+            abc = abcrt.ABC(a[1])
+            if any(abc.mn(i['name']) == 'MenuInventory' and abc.mn(t.name) == 'uwInvVersion'
+                   for i in abc.instances for t in i['traits']):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def is_ultrawide(name, path, e):
+    """Ultrawide Menus' inventory screen (its folder, or a uwInvVersion member): never used as the source"""
+    if name.lower() == UW_FOLDER.lower():
+        return True
+    try:
+        return has_ultrawide(read_entry(path, e))
+    except Exception:
+        return False
 
 
 def mods_settings(docs):
@@ -257,22 +293,30 @@ def run(args):
     say('Gear Compare: Mods\\%s' % gc_name)
 
     order = local_mods(game, docs)
-    others = []
+    others, uw = [], []
     for name in order:
         if name.lower() == gc_name.lower():
             continue
         hit = find_in_content(os.path.join(game, 'Mods', name, 'content'))
-        if hit:
-            others.append((name, hit))
+        if not hit:
+            continue
+        if is_ultrawide(name, *hit):
+            uw.append(name)                              # Ultrawide Menus' copy: its patcher rebuilds it afterwards
+            continue
+        others.append((name, hit))
     modio = modio_inventory_mods(docs)
+    # the inventory mod the game loads first among all of them (Ultrawide Menus' copy included)
+    first = next((n for n in order if n in uw or n in dict(others)), None)
 
     say('')
     if others:
         say('Other mods that change the inventory screen (load order):')
         for i, (name, _) in enumerate(others, 1):
-            say('  %d. %s%s' % (i, name, '   <- the one the game would load' if i == 1 else ''))
+            say('  %d. %s%s' % (i, name, '   <- the one the game would load' if name == first else ''))
     else:
         say('No other mod in the Mods folder changes the inventory screen.')
+    for name in uw:
+        say("  (not listed: Mods\\%s - Ultrawide Menus' copy of the inventory screen)" % name)
     if modio:
         say('')
         say('WARNING: these mod.io mods (in-game Mods menu) replace the inventory screen too:')
@@ -280,11 +324,17 @@ def run(args):
             say('  - ' + m)
         say('mod.io mods always load before the Mods folder, so the patched file would NOT be used.')
         say('Disable them in the in-game Mods menu, or use the "Script only" file of Gear Compare.')
-    gi = [n.lower() for n in order].index(gc_name.lower()) if gc_name in order else -1
-    if others and gi > [n.lower() for n in order].index(others[0][0].lower()):
+    lower = [n.lower() for n in order]
+    gi = lower.index(gc_name.lower()) if gc_name.lower() in lower else -1
+    uw_first = bool(first) and first in uw and gi > lower.index(first.lower())
+    if uw_first:
         say('')
-        say('WARNING: %s loads before %s (mods.settings priority). Give Gear Compare a higher priority' % (others[0][0], gc_name))
-        say('(a lower Priority number) or the patched file will not be used.')
+        say("Mods\\%s holds Ultrawide Menus' copy of the inventory screen. Run Ultrawide Menus Patcher after" % first)
+        say("this patcher, so it rebuilds that copy from Gear Compare's new file.")
+    elif first and gi > lower.index(first.lower()):
+        say('')
+        say('WARNING: %s loads before %s (a mods.settings priority, or its folder' % (first, gc_name))
+        say('name sorts first). Give Gear Compare a higher priority (a lower Priority number) or the patched file will not be used.')
 
     # choose the source
     src = args.source
@@ -346,7 +396,8 @@ def run(args):
     if skipped:
         say('Some Gear Compare features did not fit this inventory screen and were left out (see above);')
         say('Gear Compare adapts to that automatically.')
-    say('Start the game to use it. Run this patcher again after updating %s or Gear Compare.' % (
+    say('%s Run this patcher again after updating %s or Gear Compare.' % (
+        'Now run Ultrawide Menus Patcher, then start the game.' if uw_first else 'Start the game to use it.',
         label if src.lower() != 'vanilla' else 'a mod that changes the inventory screen'))
     return 0
 

@@ -15,6 +15,10 @@ What it does, and does not do:
   Compare's mod folder. A backup of the previous files goes to
   `Mods\mod0_GearCompare\patcher_backup\<date-time>`.
 - Never changes the other mod's files and never redistributes them.
+- Never uses Ultrawide Menus' copy of the inventory screen
+  (`Mods\mod0000_UltrawideMenus`, or any file whose `MenuInventory` class has a
+  `uwInvVersion` member) as its source. Run Ultrawide Menus Patcher after this
+  patcher, so it rebuilds that copy from Gear Compare's new file.
 - No network access, no installer, no registry writes. It only *reads* the
   Steam/GOG registry keys to find the game folder.
 - Python standard library only; no third-party packages.
@@ -62,6 +66,7 @@ byte-for-byte reproducible, so a rebuilt exe will have a different hash.
 
 Released exes (on Nexus Mods and GitHub Releases), SHA-256:
 
+- 1.1.2: `d0bf72089bf0cecd966b4c48dc03ecad51b00f36cdf056ef8049e8935baa5691`
 - 1.1.1: `5ee77f24a29006a5b635ab5e18b503207ebf737cba433480a314ddbc0ef8d3ca`
 - 1.1.0: `6f7287f995f315454da3c2551187679555a31aab8786005ed87756e686e38115`
 - 1.0.0: `61a829d08414b54f45947f262488e4c961600ec34ca135995ed4191c80c43d69`
