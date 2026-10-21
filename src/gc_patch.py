@@ -941,6 +941,27 @@ def inflate_swf(cfx):
     return b'FWS' + cfx[3:8] + body
 
 
+# CR2W tables cr2w.rewrap copies unchanged (name in cr2w.checks -> table index, entry size); it rewrites only the chunk
+# table, chunk 0, the header CRC and the sizes, and those must always pass.
+COPIED_TABLES = {'strings': (0, 1), 'names': (1, 8), 'imports': (2, 8), 'props': (3, 16), 'buffers': (5, 24),
+                 'embedded': (6, 24)}
+
+
+def kept_crc_rows(orig, out):
+    """cr2w.checks rows that fail in out only because they already failed in orig: the CRC of a table rewrap copies,
+    with the same bytes and the same stored CRC in both files. Some mod tools store a non-standard CRC there (UI
+    Remastered Edition: crc32 of the first 8 of the 16 bytes of its properties table); the game loads those files, and
+    keeping the other author's bytes as they are is not an error of this patch."""
+    wi, wo = cr2w.CR2W(orig), cr2w.CR2W(out)
+    before = {r[0]: r for r in cr2w.checks(wi)}
+    kept = []
+    for nm, (i, es) in COPIED_TABLES.items():
+        r = before.get('table %s crc32' % nm)
+        if r and r[1] != r[2] and wi.tables[i] == wo.tables[i] and wi.table_bytes(i, es) == wo.table_bytes(i, es):
+            kept.append(r[0])
+    return kept
+
+
 def patch_redswf(orig, feats=ALL):
     """panel_inventory.redswf bytes (any version derived from the game's) -> Gear Compare-patched bytes with the
     features in feats. Raises PatchError when a part one of them edits is missing or different."""
@@ -964,7 +985,8 @@ def patch_redswf(orig, feats=ALL):
         raise
     except (AssertionError, StopIteration, SystemExit, ValueError, KeyError, IndexError):
         raise PatchError('the part of the inventory screen it changes is different in this file')
-    bad = [r for r in cr2w.checks(cr2w.CR2W(out)) if r[1] != r[2]]
+    kept = kept_crc_rows(orig, out)
+    bad = [r for r in cr2w.checks(cr2w.CR2W(out)) if r[1] != r[2] and r[0] not in kept]
     if bad:
         raise PatchError('container check failed: %s' % bad[0][0])
     return out
@@ -974,7 +996,10 @@ def patch_best(orig, log=print):
     """Add Gear Compare's features one at a time to a fresh copy of orig; keep each one that applies cleanly.
     Returns (patched bytes, feature bits, [(feature name, reason skipped)])."""
     feats, skipped = 0, []
-    patch_redswf(orig, 0)                          # the base file itself must be readable and patchable
+    base = patch_redswf(orig, 0)                   # the base file itself must be readable and patchable
+    for row in kept_crc_rows(orig, base):
+        log('  note: this file stores a non-standard checksum for its %s table; kept as it is (the game accepts it)'
+            % row.split()[1])
     for f in (F_SORT, F_ALWAYS, F_DUR, F_WIDE, F_POS):
         try:
             patch_redswf(orig, feats | f)
